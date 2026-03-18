@@ -16,6 +16,8 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 
 st.set_page_config(page_title="GeoVision AI Pro", layout="wide")
 st.title("🌍 GeoVision AI Pro - Intelligent Image Location Finder")
+st.subheader("📊 Confidence Level")
+st.progress(75)
 
 # -----------------------------
 # EXIF GPS Extraction
