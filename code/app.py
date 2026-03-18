@@ -7,10 +7,10 @@ import base64
 from openai import OpenAI
 
 # -----------------------------
-# CONFIG
+# CONFIG (Streamlit Secrets)
 # -----------------------------
-GOOGLE_API_KEY = "YOUR_GOOGLE_API_KEY"
-OPENAI_API_KEY = "YOUR_OPENAI_API_KEY"
+GOOGLE_API_KEY = st.secrets["GOOGLE_API_KEY"]
+OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
@@ -46,62 +46,79 @@ def get_gps_coords(file):
 # Reverse Geocoding
 # -----------------------------
 def get_address(lat, lon):
-    geolocator = Nominatim(user_agent="geo_app")
-    location = geolocator.reverse((lat, lon))
-    return location.address if location else "Address not found"
+    try:
+        geolocator = Nominatim(user_agent="geo_app")
+        location = geolocator.reverse((lat, lon), timeout=10)
+        return location.address if location else "Address not found"
+    except:
+        return "Geocoding failed"
 
 # -----------------------------
 # Google Vision Landmark Detection
 # -----------------------------
-def detect_landmarks(image):
-    img_bytes = base64.b64encode(image).decode()
-
-    url = f"https://vision.googleapis.com/v1/images:annotate?key={GOOGLE_API_KEY}"
-
-    payload = {
-        "requests": [
-            {
-                "image": {"content": img_bytes},
-                "features": [{"type": "LANDMARK_DETECTION"}]
-            }
-        ]
-    }
-
-    response = requests.post(url, json=payload)
-    result = response.json()
-
+def detect_landmarks(image_bytes):
     try:
-        landmark = result["responses"][0]["landmarkAnnotations"][0]
-        name = landmark["description"]
-        lat = landmark["locations"][0]["latLng"]["latitude"]
-        lon = landmark["locations"][0]["latLng"]["longitude"]
-        return name, lat, lon
+        img_bytes = base64.b64encode(image_bytes).decode()
+
+        url = f"https://vision.googleapis.com/v1/images:annotate?key={GOOGLE_API_KEY}"
+
+        payload = {
+            "requests": [
+                {
+                    "image": {"content": img_bytes},
+                    "features": [{"type": "LANDMARK_DETECTION"}]
+                }
+            ]
+        }
+
+        response = requests.post(url, json=payload, timeout=15)
+        result = response.json()
+
+        landmark = result["responses"][0].get("landmarkAnnotations")
+
+        if landmark:
+            name = landmark[0]["description"]
+            lat = landmark[0]["locations"][0]["latLng"]["latitude"]
+            lon = landmark[0]["locations"][0]["latLng"]["longitude"]
+            return name, lat, lon
+
     except:
-        return None
+        pass
+
+    return None
 
 # -----------------------------
 # LLM Reasoning
 # -----------------------------
 def analyze_with_llm(image_bytes):
-    response = client.chat.completions.create(
-        model="gpt-5.3",
-        messages=[
-            {"role": "user", "content": [
-                {"type": "text", "text": "Guess the location of this image. Provide country, city, and reasoning."},
-                {"type": "image_url", "image_url": f"data:image/jpeg;base64,{base64.b64encode(image_bytes).decode()}"}
-            ]}
-        ]
-    )
-    return response.choices[0].message.content
+    try:
+        response = client.chat.completions.create(
+            model="gpt-5.3",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Analyze this image and guess the most probable location (country, city) with reasoning."},
+                        {
+                            "type": "image_url",
+                            "image_url": f"data:image/jpeg;base64,{base64.b64encode(image_bytes).decode()}"
+                        }
+                    ]
+                }
+            ]
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        return f"LLM analysis failed: {str(e)}"
 
 # -----------------------------
-# MAIN UI
+# UI
 # -----------------------------
-uploaded_file = st.file_uploader("Upload an Image", type=["jpg", "jpeg", "png"])
+uploaded_file = st.file_uploader("📤 Upload an Image", type=["jpg", "jpeg", "png"])
 
 if uploaded_file:
     image = Image.open(uploaded_file)
-    st.image(image, caption="Uploaded Image", use_column_width=True)
+    st.image(image, caption="Uploaded Image", use_container_width=True)
 
     uploaded_file.seek(0)
     gps = get_gps_coords(uploaded_file)
@@ -119,14 +136,16 @@ if uploaded_file:
         st.map({"lat": [lat], "lon": [lon]})
 
     # -----------------------------
-    # CASE 2: LANDMARK DETECTION
+    # CASE 2: AI FLOW
     # -----------------------------
     else:
-        st.warning("⚠️ No GPS metadata found. Trying AI detection...")
+        st.warning("⚠️ No GPS metadata found. Running AI analysis...")
 
         image_bytes = uploaded_file.getvalue()
 
-        landmark = detect_landmarks(image_bytes)
+        # Step 1: Landmark Detection
+        with st.spinner("🔍 Detecting landmarks..."):
+            landmark = detect_landmarks(image_bytes)
 
         if landmark:
             name, lat, lon = landmark
@@ -134,8 +153,15 @@ if uploaded_file:
             st.map({"lat": [lat], "lon": [lon]})
 
         else:
-            st.info("🤖 Using LLM for intelligent estimation...")
+            # Step 2: LLM Reasoning
+            with st.spinner("🧠 Analyzing with AI..."):
+                result = analyze_with_llm(image_bytes)
 
-            result = analyze_with_llm(image_bytes)
-            st.write("🧠 AI Analysis:")
+            st.subheader("🧠 AI Location Estimate")
             st.write(result)
+
+# -----------------------------
+# FOOTER
+# -----------------------------
+st.markdown("---")
+st.caption("🚀 Built for Hackathon | GeoVision AI Pro")
